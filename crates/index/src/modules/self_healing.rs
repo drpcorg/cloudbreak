@@ -11,7 +11,10 @@ use sea_orm::DatabaseConnection;
 use std::{
     collections::{BTreeSet, HashSet},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{sync::mpsc::Receiver, task::JoinHandle};
@@ -41,6 +44,7 @@ pub struct SelfHealingState {
     /// carry no chain data and therefore can not bridge the walk back to them (see
     /// [`SlotFinalizer::enqueue_gap_boundary`]).
     pub gap_boundaries: Arc<Mutex<BTreeSet<u64>>>,
+    filling: Arc<AtomicBool>,
     pub finalizer: SlotFinalizer,
     pub supply_tracker: SupplyTracker,
 }
@@ -56,6 +60,7 @@ impl SelfHealingState {
             last_blockhash_received: Arc::new(Mutex::new(String::new())),
             gaps_list: Arc::new(Mutex::new(Vec::new())),
             gap_boundaries: Arc::new(Mutex::new(BTreeSet::new())),
+            filling: Arc::new(AtomicBool::new(false)),
             finalizer,
             supply_tracker,
         }
@@ -94,7 +99,7 @@ impl SelfHealingState {
         blockhash: &str,
         parent_slot: u64,
         parent_blockhash: &str,
-    ) {
+    ) -> bool {
         let last_slot_received = *self
             .last_slot_received
             .lock()
@@ -107,10 +112,7 @@ impl SelfHealingState {
                 last_slot_received
             );
 
-            // If we had added the slot to the gaps list, remove it
-            self.remove_slot_from_gaps_list(slot);
-
-            return;
+            return true;
         }
 
         if last_slot_received != 0 && slot > last_slot_received + 1 {
@@ -174,6 +176,25 @@ impl SelfHealingState {
             .last_blockhash_received
             .lock()
             .expect("Failed to lock last_blockhash_received") = blockhash.to_owned();
+
+        false
+    }
+
+    pub async fn late_block_saved(&self, slot: u64, parent_slot: u64) {
+        let no_gaps_left = {
+            let mut gaps_list = self.gaps_list.lock().expect("Failed to lock gaps_list");
+            gaps_list.retain(|s| *s <= parent_slot || *s > slot);
+            gaps_list.is_empty()
+        };
+        if !no_gaps_left || self.filling.load(Ordering::SeqCst) {
+            return;
+        }
+        self.gap_boundaries
+            .lock()
+            .expect("Failed to lock gap_boundaries")
+            .clear();
+        self.supply_tracker.finish_gap();
+        self.finalizer.resume().await;
     }
 
     /// Starts a separate task that periodically repairs confirmed slot gaps out of incremental snapshots.
@@ -206,8 +227,10 @@ impl SelfHealingState {
             let mut snapshot_unavailable_retries: u32 = 0;
 
             loop {
+                self.filling.store(false, Ordering::SeqCst);
                 // TODO: Make the gap filling interval configurable
                 tokio::time::sleep(Duration::from_secs(30)).await;
+                self.filling.store(true, Ordering::SeqCst);
 
                 let mut confirmed_gaps_list = self
                     .gaps_list
