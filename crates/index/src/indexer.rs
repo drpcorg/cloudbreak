@@ -317,7 +317,7 @@ pub async fn process_update(
         Some(UpdateOneof::Block(block)) => {
             // Confirm slot continuity from the block chain (parent_slot/parent_blockhash). On a
             // confirmed gap this pauses finalization and queues the range for repair.
-            indexer_state
+            let late = indexer_state
                 .self_healing_state
                 .check_slot_gap(
                     block.slot,
@@ -326,8 +326,16 @@ pub async fn process_update(
                     &block.parent_blockhash,
                 )
                 .await;
+            let (slot, parent_slot) = (block.slot, block.parent_slot);
 
             modules::save_block::save_block(block, db, config.clone(), indexer_state.clone()).await;
+
+            if late {
+                indexer_state
+                    .self_healing_state
+                    .late_block_saved(slot, parent_slot)
+                    .await;
+            }
         }
         Some(UpdateOneof::Slot(slot_update)) => {
             let slot = slot_update.slot;
