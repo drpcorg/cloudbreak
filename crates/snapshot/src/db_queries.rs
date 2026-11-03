@@ -189,6 +189,13 @@ pub async fn create_temp_snapshot_account_versions_table(
 ) -> Result<(), anyhow::Error> {
     tracing::info!(target: "create_temp_snapshot_account_versions_table", "start creating temp snapshot account versions table");
 
+    database
+        .execute_unprepared("DROP TABLE IF EXISTS temp_snapshot_account_versions;")
+        .await
+        .inspect_err(|_| {
+            metrics::increment_db_snapshot_errors();
+        })?;
+
     let sql = "CREATE UNLOGGED TABLE IF NOT EXISTS temp_snapshot_account_versions (pubkey BYTEA NOT NULL, slot BIGINT NOT NULL, owner BYTEA NOT NULL);";
 
     let result = database.execute_unprepared(sql).await;
@@ -304,6 +311,15 @@ pub async fn clean_up_duplicated_accounts(
 
     tracing::info!(target: "clean_up_duplicated_accounts", "cleaned up {} duplicated accounts", rows_affected);
 
+    database
+        .execute_unprepared(
+            "DROP TABLE IF EXISTS accounts_to_delete, temp_snapshot_account_versions;",
+        )
+        .await
+        .inspect_err(|_| {
+            metrics::increment_db_snapshot_errors();
+        })?;
+
     Ok(())
 }
 
@@ -360,6 +376,13 @@ pub async fn create_accounts_to_delete_table(
     database: &DatabaseConnection,
 ) -> Result<(), anyhow::Error> {
     tracing::info!(target: "create_accounts_to_delete_table", "start creating accounts to delete table");
+
+    database
+        .execute_unprepared("DROP TABLE IF EXISTS accounts_to_delete;")
+        .await
+        .inspect_err(|_| {
+            metrics::increment_db_snapshot_errors();
+        })?;
 
     let sql = include_str!("db/create_accounts_to_delete_table.sql");
     let start_time = Instant::now();
