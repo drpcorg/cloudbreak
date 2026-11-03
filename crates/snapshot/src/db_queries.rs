@@ -14,7 +14,7 @@ use cloudbreak_entity::snapshot_accounts::{self};
 use rust_decimal::Decimal;
 use sea_orm::{
     ActiveValue::Set, ConnectionTrait, DatabaseConnection, EntityTrait, Statement,
-    TransactionTrait, Value,
+    TransactionTrait, Value, sea_query::OnConflict,
 };
 use tokio::time::Instant;
 use yellowstone_grpc_proto::geyser::SubscribeUpdateAccount;
@@ -60,6 +60,7 @@ pub async fn upsert_accounts_batched(
             })
             .collect::<Result<Vec<_>, anyhow::Error>>()?,
     )
+    .on_conflict(OnConflict::new().do_nothing().to_owned())
     .exec_without_returning(db)
     .await;
 
