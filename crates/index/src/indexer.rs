@@ -14,7 +14,7 @@ use cloudbreak_core::{
         supply::{self, SupplyTracker},
     },
 };
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
 use std::{
     sync::{Arc, Mutex, atomic::AtomicBool},
     time::Duration,
@@ -87,6 +87,13 @@ pub async fn run(config: &str) -> CloudbreakResult<()> {
     EnvironmentInfo::upsert_filters(&db, &config.programs)
         .await
         .expect("Failed to upsert indexer filter");
+
+    if config.snapshot.is_some() {
+        crate::db_queries::update_service_health(&db, false).await;
+        db.execute_unprepared("TRUNCATE accounts, snapshot_accounts")
+            .await
+            .expect("Failed to truncate accounts before the snapshot bootstrap");
+    }
 
     // Buffer layer that allows to keep track of falling behind ocurrences (and help recovering from them)
     let (buffer_channel_tx, buffer_channel_rx) =
