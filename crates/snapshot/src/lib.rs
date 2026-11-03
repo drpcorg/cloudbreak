@@ -471,7 +471,10 @@ fn insert_into_temp_snapshot_account_versions_handler(
 
                 // todo: make this configurable
                 if join_set.len() >= 10 {
-                    join_set.join_next().await;
+                    join_set
+                        .join_next()
+                        .await
+                        .expect("not expected empty join_set")??;
                 }
 
                 join_set.spawn(async move {
